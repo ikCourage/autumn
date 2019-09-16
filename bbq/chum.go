@@ -115,15 +115,15 @@ func (self *chum) close(locked bool) (err error) {
 	}
 	delete(self.party.chums, self.fd)
 	if nil != self.anext {
-		self.anext.prev = self.aprev
+		self.anext.aprev = self.aprev
 	}
 	if nil != self.aprev {
-		self.aprev.next = self.anext
+		self.aprev.anext = self.anext
 	} else {
 		self.party.head = self.anext
 	}
 	if self == self.party.last {
-		self.party.last = self.anext
+		self.party.last = self.aprev
 	}
 	if self == self.party.cursor {
 		self.party.cursor = self.anext
@@ -179,38 +179,7 @@ func (self *chum) Join(id string) {
 
 func (self *chum) Broadcast(b []byte, text bool) error {
 	if nil != self.team {
-		var n int
-		l := len(b)
-		switch {
-		case l < 0x7E:
-			n = 2
-		case l <= 0xFFFF:
-			n = 4
-		default:
-			return Error_notsupport_length64
-		}
-		bs := pollbytes.Get(l+n, l+n)
-		if text {
-			bs[0] = 0x81
-		} else {
-			bs[0] = 0x82
-		}
-		if l < 0x7E {
-			bs[1] = byte(l)
-		} else {
-			bs[1] = 0x7E
-			bs[2] = byte(l >> 8)
-			bs[3] = byte(l & 0xFF)
-		}
-		copy(bs[n:], b)
-		self.team.rwLK.RLock()
-		chum := self.team.head
-		for nil != chum && chum != self {
-			chum.Write(bs)
-			chum = chum.next
-		}
-		self.team.rwLK.RUnlock()
-		pollbytes.Put(bs)
+		return self.team.broadcast(self, b, text)
 	}
 	return nil
 }
@@ -497,7 +466,11 @@ __retry:
 				// 待读取的缓冲
 				self.readBuf = pollbytes.Get(1024, 1024)
 			default:
-				self.flags |= flag_discard
+				self.flags |= flag_data | flag_discard
+
+				// 更新活跃时间（有效的通信才是活跃的）
+				self.active = timer.Now()
+				self.handler(self)
 			}
 		} else {
 			self.Close()

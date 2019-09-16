@@ -17,19 +17,15 @@ type team struct {
 	head   *chum
 	last   *chum
 	msgLK  sync.Mutex
-	msgMap map[int]message
+	msgMap map[int]struct{}
 	length uint32
-}
-
-type message struct {
-	senders map[int]struct{}
 }
 
 func newTeam(party *party, id string) *team {
 	return &team{
 		party:  party,
 		id:     id,
-		msgMap: make(map[int]message),
+		msgMap: make(map[int]struct{}),
 	}
 }
 
@@ -58,7 +54,7 @@ func (self *team) remove(chum *chum) {
 		self.head = chum.next
 	}
 	if chum == self.last {
-		self.last = chum.next
+		self.last = chum.prev
 	}
 	if self.length == 1 {
 		self.party.teamsLK.Lock()
@@ -89,41 +85,31 @@ func (self *team) broadcast(chum *chum, b []byte, text bool) error {
 		return Error_notsupport_length64
 	}
 	// 缓存起来，延迟发送（尽量合并相同的消息）
-	hash := hash_times33(header[:], b)
+	hash := hash_times33(header[:n], b)
 	self.msgLK.Lock()
-	msg, ok := self.msgMap[hash]
-	if ok {
-		msg.senders[chum.fd] = struct{}{}
+	if _, ok := self.msgMap[hash]; ok {
 		self.msgLK.Unlock()
 		return nil
 	}
-	bs := pollbytes.Get(l+n, l+n)
-	copy(bs, header[:])
-	copy(bs[n:], b)
-	msg = message{
-		senders: make(map[int]struct{}),
-	}
-	msg.senders[chum.fd] = struct{}{}
-	self.msgMap[hash] = msg
+	self.msgMap[hash] = struct{}{}
 	self.msgLK.Unlock()
 
+	bs := pollbytes.Get(l+n, l+n)
+	copy(bs, header[:n])
+	copy(bs[n:], b)
+
 	timer.After(broadcast_delay, func() {
+		self.msgLK.Lock()
+		delete(self.msgMap, hash)
+		self.msgLK.Unlock()
 		self.rwLK.RLock()
 		chum := self.head
-		if nil != chum {
-			self.msgLK.Lock()
-			delete(self.msgMap, hash)
-			self.msgLK.Unlock()
-			for {
-				chum.Write(bs)
-				chum = chum.next
-				if nil == chum {
-					break
-				}
-			}
+		for nil != chum {
+			chum.Write(bs)
+			chum = chum.next
 		}
-		pollbytes.Put(bs)
 		self.rwLK.RUnlock()
+		pollbytes.Put(bs)
 	})
 	return nil
 }

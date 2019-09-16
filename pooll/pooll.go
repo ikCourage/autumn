@@ -42,6 +42,7 @@ func New(config *Config) Pooll {
 		config = defaultConfig
 	}
 	self := &poollTask{
+		max:     uint32(runtime.GOMAXPROCS(0)),
 		handler: config.Handler,
 	}
 	self.cond = sync.NewCond(&self.lk)
@@ -75,17 +76,13 @@ func (self *poollTask) Put(v interface{}) error {
 	}
 	self.last = task
 	self.length++
-	if worker := self.worker; worker > self.working {
+	if self.worker > self.working {
 		self.lk.Unlock()
 		self.cond.Signal()
 	} else {
-		max := self.max
-		if max == 0 {
-			max = uint32(runtime.GOMAXPROCS(0))
-		}
-		if worker < max {
+		if self.worker < self.max {
 			self.worker++
-			go self.loop(worker)
+			go self.loop(self.worker - 1)
 		}
 		self.lk.Unlock()
 	}

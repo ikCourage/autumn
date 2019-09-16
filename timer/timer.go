@@ -54,6 +54,9 @@ func After(d time.Duration, f func()) {
 		if nil == defaultTimers.wakeup {
 			defaultTimers.wakeup = make(chan struct{}, 1)
 			go loop()
+		} else {
+			// 立刻唤醒
+			defaultTimers.wakeup <- struct{}{}
 		}
 	} else {
 		if when >= defaultTimers.queue[defaultTimers.right-1].when {
