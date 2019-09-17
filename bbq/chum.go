@@ -225,6 +225,8 @@ func (self *chum) Read(b []byte) (int, error) {
 		default:
 			self.Close()
 		}
+	} else if n <= 0 {
+		err = syscall.EAGAIN
 	}
 	return n, err
 }
@@ -242,6 +244,8 @@ func (self *chum) write(b []byte) (int, error) {
 		default:
 			self.Close()
 		}
+	} else if n <= 0 {
+		err = syscall.EAGAIN
 	}
 	return n, err
 }
@@ -379,6 +383,11 @@ __retry:
 			return
 		}
 	} else {
+		if self.payloadOffset == 2 {
+			// 如果同时有多个线程在读的话，那么第二个线程将经过此处
+			// 事实上，此时该连接已经由第一个线程关闭了
+			return Error_closed
+		}
 		n = int(bs[0])
 	}
 	if self.payloadOffset < uint32(n) {
@@ -405,12 +414,12 @@ __retry:
 	switch self.opCode {
 	case 0x9:
 		// ping，返回 pong
-		// TODO: 更新活跃时间
-		self.Write(frame_pong)
+		self.active = timer.Now()
 		self.flags |= flag_discard
+		self.Write(frame_pong)
 	case 0xA:
 		// pong，丢弃后续数据
-		// TODO: 更新活跃时间
+		self.active = timer.Now()
 		self.flags |= flag_discard
 	}
 	if self.payloadLength == 0 {
