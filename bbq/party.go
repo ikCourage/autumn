@@ -90,9 +90,10 @@ func (self *party) Listen(network, address string) (err error) {
 			}
 
 			chum := &chum{
-				Conn:  conn,
-				fd:    kpoll.Sysfd_unsafe(conn),
-				party: self,
+				Conn:   conn,
+				fd:     kpoll.Sysfd_unsafe(conn),
+				party:  self,
+				active: timer.Now(),
 			}
 			self.chumsLk.Lock()
 			self.chums[chum.fd] = chum
@@ -104,7 +105,6 @@ func (self *party) Listen(network, address string) (err error) {
 			}
 			self.last = chum
 			self.chumsLk.Unlock()
-			chum.party = self
 			self.kpoller.Add(chum.fd, kpoll.KEV_READ|kpoll.KEF_ET)
 		},
 	})

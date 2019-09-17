@@ -66,7 +66,7 @@ func (self *team) remove(chum *chum) {
 	self.rwLK.Unlock()
 }
 
-func (self *team) broadcast(chum *chum, b []byte, text bool) error {
+func (self *team) broadcast(chum *chum, b []byte, text bool, delay time.Duration) error {
 	header := [4]byte{0x82, 0x7E}
 	if text {
 		header[0] = 0x81
@@ -84,6 +84,22 @@ func (self *team) broadcast(chum *chum, b []byte, text bool) error {
 	default:
 		return Error_notsupport_length64
 	}
+	if delay < 0 {
+		bs := PBytes.Get(l+n, l+n)
+		copy(bs, header[:n])
+		copy(bs[n:], b)
+		self.rwLK.RLock()
+		chum := self.head
+		for nil != chum {
+			chum.Write(bs)
+			chum = chum.next
+		}
+		self.rwLK.RUnlock()
+		PBytes.Put(bs)
+		return nil
+	} else if delay == 0 {
+		delay = broadcast_delay
+	}
 	// 缓存起来，延迟发送（尽量合并相同的消息）
 	hash := hash_times33(header[:n], b)
 	self.msgLK.Lock()
@@ -94,7 +110,7 @@ func (self *team) broadcast(chum *chum, b []byte, text bool) error {
 	self.msgMap[hash] = struct{}{}
 	self.msgLK.Unlock()
 
-	bs := pollbytes.Get(l+n, l+n)
+	bs := PBytes.Get(l+n, l+n)
 	copy(bs, header[:n])
 	copy(bs[n:], b)
 
@@ -109,7 +125,7 @@ func (self *team) broadcast(chum *chum, b []byte, text bool) error {
 			chum = chum.next
 		}
 		self.rwLK.RUnlock()
-		pollbytes.Put(bs)
+		PBytes.Put(bs)
 	})
 	return nil
 }

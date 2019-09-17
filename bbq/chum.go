@@ -9,7 +9,9 @@ import (
 	"io/ioutil"
 	"net"
 	"sync"
+	"sync/atomic"
 	"syscall"
+	"time"
 )
 
 const (
@@ -44,7 +46,7 @@ var (
 )
 
 var (
-	pollbytes = pbytes.New(2, 65536)
+	PBytes = pbytes.New(2, 65536)
 )
 
 const (
@@ -78,12 +80,12 @@ type chum struct {
 	flags         uint8 // 标志 action length 等是否准备好
 	header        uint8
 	opCode        uint8
-	_             uint8
+	reading       uint8
 	readBuf       []byte
 	writeBuf      []byte
 	writeLK       sync.Mutex
 	writeOffset   uint32
-	reading       uint32
+	closed        uint32
 	active        int64
 	fd            int
 }
@@ -94,7 +96,7 @@ type Chum interface {
 	Write(b []byte) (int, error)
 
 	Join(id string)
-	Broadcast(b []byte, text bool) error
+	Broadcast(b []byte, text bool, delay time.Duration) error
 	WriteFrame(b []byte, text bool) (int, error)
 
 	Closed() bool
@@ -107,7 +109,7 @@ type Chum interface {
 }
 
 func (self *chum) close(locked bool) (err error) {
-	if self.fd == 0 {
+	if !atomic.CompareAndSwapUint32(&self.closed, 0, 1) {
 		return Error_closed
 	}
 	if !locked {
@@ -136,11 +138,11 @@ func (self *chum) close(locked bool) (err error) {
 		self.team = nil
 	}
 	if nil != self.readBuf {
-		pollbytes.Put(self.readBuf)
+		PBytes.Put(self.readBuf)
 		self.readBuf = nil
 	}
 	if nil != self.writeBuf {
-		pollbytes.Put(self.writeBuf)
+		PBytes.Put(self.writeBuf)
 		self.writeBuf = nil
 	}
 	err = self.Conn.Close()
@@ -149,7 +151,6 @@ func (self *chum) close(locked bool) (err error) {
 	self.aprev = nil
 	self.anext = nil
 	self.party = nil
-	self.fd = 0
 	if nil != self.handler && self.flags&flag_stream != 0 {
 		self.handler(self)
 		self.handler = nil
@@ -163,10 +164,13 @@ func (self *chum) Close() error {
 }
 
 func (self *chum) Closed() bool {
-	return self.fd == 0
+	return atomic.LoadUint32(&self.closed) == 1
 }
 
 func (self *chum) Join(id string) {
+	if nil != self.team {
+		self.team.remove(self)
+	}
 	self.party.teamsLK.Lock()
 	team, ok := self.party.teams[id]
 	if !ok {
@@ -177,9 +181,9 @@ func (self *chum) Join(id string) {
 	self.party.teamsLK.Unlock()
 }
 
-func (self *chum) Broadcast(b []byte, text bool) error {
+func (self *chum) Broadcast(b []byte, text bool, delay time.Duration) error {
 	if nil != self.team {
-		return self.team.broadcast(self, b, text)
+		return self.team.broadcast(self, b, text, delay)
 	}
 	return nil
 }
@@ -258,7 +262,7 @@ func (self *chum) Write(b []byte) (nn int, err error) {
 		if n < nn {
 			n = nn - n
 			self.writeOffset = uint32(n)
-			self.writeBuf = pollbytes.Get(0, n)
+			self.writeBuf = PBytes.Get(0, n)
 			self.writeBuf = self.writeBuf[:cap(self.writeBuf)]
 			copy(self.writeBuf, b)
 
@@ -271,10 +275,10 @@ func (self *chum) Write(b []byte) (nn int, err error) {
 		n = cap(self.writeBuf)
 		if nn > n-int(self.writeOffset) {
 			buf := self.writeBuf
-			self.writeBuf = pollbytes.Get(0, int(self.writeOffset)+nn)
+			self.writeBuf = PBytes.Get(0, int(self.writeOffset)+nn)
 			self.writeBuf = self.writeBuf[:cap(self.writeBuf)]
 			copy(self.writeBuf, buf[:self.writeOffset])
-			pollbytes.Put(buf)
+			PBytes.Put(buf)
 		}
 		copy(self.writeBuf[self.writeOffset:], b)
 		self.writeOffset += uint32(nn)
@@ -314,7 +318,7 @@ func (self *chum) writeLoop() error {
 		copy(self.writeBuf, self.writeBuf[n:self.writeOffset])
 		self.writeOffset -= uint32(n)
 	} else {
-		pollbytes.Put(self.writeBuf)
+		PBytes.Put(self.writeBuf)
 		self.writeBuf = nil
 		// #ctr 重新侦听 read
 		self.party.kpoller.Mod(self.fd, kpoll.KEV_READ|kpoll.KEF_ET)
@@ -369,6 +373,8 @@ __retry:
 				return Error_opcode
 			}
 			bs[0] = uint8(n)
+		} else {
+			return
 		}
 	} else {
 		n = int(bs[0])
@@ -387,6 +393,8 @@ __retry:
 			if self.header&header_mask != 0 {
 				copy(bs[:4], bs[self.payloadOffset-4:])
 			}
+		} else {
+			return
 		}
 	}
 	self.header |= header_read
@@ -413,12 +421,12 @@ __retry:
 		self.length += self.payloadLength
 		if self.offset == 0 {
 			// 待读取的缓冲
-			self.readBuf = pollbytes.Get(int(self.length), int(self.length))
+			self.readBuf = PBytes.Get(int(self.length), int(self.length))
 		} else {
 			bs = self.readBuf
-			self.readBuf = pollbytes.Get(int(self.length), int(self.length))
+			self.readBuf = PBytes.Get(int(self.length), int(self.length))
 			copy(self.readBuf[self.offset:], bs)
-			pollbytes.Put(bs)
+			PBytes.Put(bs)
 		}
 	}
 	return
@@ -459,12 +467,12 @@ __retry:
 				self.length = self.payloadLength - self.payloadOffset
 				if self.length != 0 {
 					// 待读取的缓冲
-					self.readBuf = pollbytes.Get(int(self.length), int(self.length))
+					self.readBuf = PBytes.Get(int(self.length), int(self.length))
 				}
 			case ActionType_stream:
 				self.flags |= flag_length | flag_stream
 				// 待读取的缓冲
-				self.readBuf = pollbytes.Get(1024, 1024)
+				self.readBuf = PBytes.Get(1024, 1024)
 			default:
 				self.flags |= flag_data | flag_discard
 
@@ -510,7 +518,7 @@ __retry:
 		self.flags |= flag_length
 		if self.length != 0 {
 			// 待读取的缓冲
-			self.readBuf = pollbytes.Get(int(self.length), int(self.length))
+			self.readBuf = PBytes.Get(int(self.length), int(self.length))
 		}
 	}
 	return
@@ -597,7 +605,7 @@ func (self *chum) readLoop() {
 			self.action = 0
 			self.handler = nil
 			if nil != self.readBuf {
-				pollbytes.Put(self.readBuf)
+				PBytes.Put(self.readBuf)
 				self.readBuf = nil
 			}
 		}
@@ -605,8 +613,8 @@ func (self *chum) readLoop() {
 		self.payloadOffset = 0
 		self.payloadLength = 0
 		self.reading = 0
-		if nil != self.party {
-			self.party.poollRead.Put(self)
+		if party := self.party; nil != party {
+			party.poollRead.Put(self)
 		}
 		return
 	}
