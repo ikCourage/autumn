@@ -29,8 +29,6 @@ var (
 func init() {
 	defaultTimers = timers{
 		queue: make([]timer, 64),
-		left:  64 / 3,
-		right: 64 / 3,
 		pooll: pooll.New(&pooll.Config{
 			Handler: runHandler,
 		}),
@@ -48,9 +46,10 @@ func After(d time.Duration, f func()) {
 	when := Now() + int64(d)
 	defaultTimers.lk.Lock()
 	if defaultTimers.left == defaultTimers.right {
+		defaultTimers.left = cap(defaultTimers.queue) / 3
+		defaultTimers.right = defaultTimers.left + 1
 		defaultTimers.queue[defaultTimers.left].when = when
 		defaultTimers.queue[defaultTimers.left].f = f
-		defaultTimers.right++
 		if nil == defaultTimers.wakeup {
 			defaultTimers.wakeup = make(chan struct{}, 1)
 			go loop()

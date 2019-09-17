@@ -80,11 +80,12 @@ type chum struct {
 	flags         uint8 // 标志 action length 等是否准备好
 	header        uint8
 	opCode        uint8
-	reading       uint8
+	_             uint8
 	readBuf       []byte
 	writeBuf      []byte
 	writeLK       sync.Mutex
 	writeOffset   uint32
+	reading       uint32
 	closed        uint32
 	active        int64
 	fd            int
@@ -130,6 +131,7 @@ func (self *chum) close(locked bool) (err error) {
 	if self == self.party.cursor {
 		self.party.cursor = self.anext
 	}
+	self.party.kpoller.Del(self.fd)
 	if !locked {
 		self.party.chumsLk.Unlock()
 	}
@@ -563,11 +565,13 @@ func (self *chum) readData() (err error) {
 }
 
 func (self *chum) readLoop() {
-	if self.reading != 0 {
-		// 同一时刻，只有一个线程可以读
+	// 同一时刻，只有一个线程可以读
+	if !atomic.CompareAndSwapUint32(&self.reading, 0, 1) {
+		if party := self.party; nil != party {
+			party.poollRead.Put(self)
+		}
 		return
 	}
-	self.reading = 1
 
 	if self.header&header_read == 0 {
 		if nil != self.readHeader() {
@@ -612,7 +616,7 @@ func (self *chum) readLoop() {
 		self.header = 0
 		self.payloadOffset = 0
 		self.payloadLength = 0
-		self.reading = 0
+		atomic.StoreUint32(&self.reading, 0)
 		if party := self.party; nil != party {
 			party.poollRead.Put(self)
 		}
@@ -620,5 +624,5 @@ func (self *chum) readLoop() {
 	}
 
 __end:
-	self.reading = 0
+	atomic.StoreUint32(&self.reading, 0)
 }
