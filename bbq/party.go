@@ -83,7 +83,7 @@ func (self *party) Listen(network, address string) (err error) {
 				self.wakeup <- struct{}{}
 				return
 			}
-			conn.SetReadDeadline(time.Now() + time.Millisecond*10)
+			conn.SetReadDeadline(time.Now().Add(time.Millisecond * 10))
 			_, err = self.upgrader.Upgrade(conn)
 			if nil != err {
 				self.wakeup <- struct{}{}
