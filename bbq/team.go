@@ -45,6 +45,7 @@ func (self *team) add(chum *chum) {
 
 func (self *team) remove(chum *chum) {
 	self.rwLK.Lock()
+	chum.team = nil
 	if nil != chum.next {
 		chum.next.prev = chum.prev
 	}

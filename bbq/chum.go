@@ -64,6 +64,7 @@ type Router struct {
 
 type chum struct {
 	net.Conn
+	id            string
 	prev          *chum
 	next          *chum
 	aprev         *chum
@@ -96,7 +97,11 @@ type Chum interface {
 	Read(b []byte) (int, error)
 	Write(b []byte) (int, error)
 
+	Register(id string)
+	GetChumById(id string) Chum
+
 	Join(id string)
+	Leave()
 	Broadcast(b []byte, text bool, delay time.Duration) error
 	WriteFrame(b []byte, text bool) (int, error)
 
@@ -115,6 +120,10 @@ func (self *chum) close(locked bool) (err error) {
 	}
 	if !locked {
 		self.party.chumsLk.Lock()
+	}
+	if self.id != "" {
+		delete(self.party.chumsMap, self.id)
+		self.id = ""
 	}
 	delete(self.party.chums, self.fd)
 	if nil != self.anext {
@@ -169,6 +178,29 @@ func (self *chum) Closed() bool {
 	return atomic.LoadUint32(&self.closed) == 1
 }
 
+func (self *chum) Register(id string) {
+	if self.id == "" {
+		self.id = id
+		self.party.chumsLk.Lock()
+		chum, ok := self.party.chumsMap[id]
+		if ok {
+			chum.close(true)
+		}
+		self.party.chumsMap[id] = self
+		self.party.chumsLk.Unlock()
+	}
+}
+
+func (self *chum) GetChumById(id string) Chum {
+	self.party.chumsLk.RLock()
+	chum, ok := self.party.chumsMap[id]
+	self.party.chumsLk.RUnlock()
+	if ok {
+		return chum
+	}
+	return nil
+}
+
 func (self *chum) Join(id string) {
 	if nil != self.team {
 		self.team.remove(self)
@@ -181,6 +213,12 @@ func (self *chum) Join(id string) {
 	}
 	team.add(self)
 	self.party.teamsLK.Unlock()
+}
+
+func (self *chum) Leave() {
+	if nil != self.team {
+		self.team.remove(self)
+	}
 }
 
 func (self *chum) Broadcast(b []byte, text bool, delay time.Duration) error {

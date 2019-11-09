@@ -17,14 +17,15 @@ type party struct {
 	poollWrite pooll.Pooll
 	poollRead  pooll.Pooll
 
-	chumsLk sync.RWMutex
-	chums   map[int]*chum
-	head    *chum
-	last    *chum
-	cursor  *chum
-	teamsLK sync.RWMutex
-	teams   map[string]*team
-	routers map[uint32]Router
+	chumsLk  sync.RWMutex
+	chumsMap map[string]*chum
+	chums    map[int]*chum
+	head     *chum
+	last     *chum
+	cursor   *chum
+	teamsLK  sync.RWMutex
+	teams    map[string]*team
+	routers  map[uint32]Router
 
 	frequently int64
 	timeout    int64
@@ -118,6 +119,7 @@ func (self *party) Listen(network, address string) (err error) {
 		},
 	})
 
+	self.chumsMap = make(map[string]*chum)
 	self.chums = make(map[int]*chum)
 	self.teams = make(map[string]*team)
 	self.wakeup = make(chan struct{}, 1)
@@ -146,11 +148,7 @@ func (self *party) Listen(network, address string) (err error) {
 				}
 				switch {
 				case events[i].Event&(kpoll.KEV_HUP|kpoll.KEV_RDHUP|kpoll.KEV_ERR) != 0:
-					if lk == 1 {
-						lk = 0
-						self.chumsLk.RUnlock()
-					}
-					chum.Close()
+					chum.close(true)
 				case events[i].Event&kpoll.KEV_READ != 0:
 					self.poollRead.Put(chum)
 				case events[i].Event&kpoll.KEV_WRITE != 0:
