@@ -148,7 +148,11 @@ func (self *party) Listen(network, address string) (err error) {
 				}
 				switch {
 				case events[i].Event&(kpoll.KEV_HUP|kpoll.KEV_RDHUP|kpoll.KEV_ERR) != 0:
-					chum.close(true)
+					if lk == 1 {
+						lk = 0
+						self.chumsLk.RUnlock()
+					}
+					chum.Close()
 				case events[i].Event&kpoll.KEV_READ != 0:
 					self.poollRead.Put(chum)
 				case events[i].Event&kpoll.KEV_WRITE != 0:
