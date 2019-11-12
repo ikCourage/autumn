@@ -203,6 +203,9 @@ func (self *chum) GetChumById(id string) Chum {
 
 func (self *chum) Join(id string) {
 	if nil != self.team {
+		if id == self.team.id {
+			return
+		}
 		self.team.remove(self)
 	}
 	self.party.teamsLK.Lock()

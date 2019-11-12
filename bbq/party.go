@@ -27,11 +27,12 @@ type party struct {
 	teams    map[string]*team
 	routers  map[uint32]Router
 
-	frequently int64
-	timeout    int64
-	clock      int64
-	sleep      *time.Timer
-	wakeup     chan struct{}
+	frequently      int64
+	timeout         int64
+	timeoutInterval int64
+	clock           int64
+	sleep           *time.Timer
+	wakeup          chan struct{}
 }
 
 type Party interface {
@@ -40,13 +41,15 @@ type Party interface {
 }
 
 type Config struct {
-	Upgrader *ws.Upgrader
-	Timeout  time.Duration
+	Upgrader        *ws.Upgrader
+	Timeout         time.Duration
+	TimeoutInterval time.Duration
 }
 
 var (
 	defaultConfig = &Config{
-		Timeout: time.Minute * 4,
+		Timeout:         time.Minute * 4,
+		TimeoutInterval: time.Minute,
 	}
 )
 
@@ -55,11 +58,15 @@ func New(config *Config) Party {
 		config = defaultConfig
 	}
 	self := &party{
-		upgrader: config.Upgrader,
-		timeout:  int64(config.Timeout),
+		upgrader:        config.Upgrader,
+		timeout:         int64(config.Timeout),
+		timeoutInterval: int64(config.TimeoutInterval),
 	}
 	if self.timeout <= 0 {
 		self.timeout = int64(defaultConfig.Timeout)
+	}
+	if self.timeoutInterval <= 0 {
+		self.timeoutInterval = int64(defaultConfig.TimeoutInterval)
 	}
 	return self
 }
@@ -224,9 +231,9 @@ __loop:
 	}
 	self.clock = now
 	if nil == self.sleep {
-		self.sleep = time.NewTimer(time.Duration(self.timeout))
+		self.sleep = time.NewTimer(time.Duration(self.timeoutInterval))
 	} else {
-		self.sleep.Reset(time.Duration(self.timeout))
+		self.sleep.Reset(time.Duration(self.timeoutInterval))
 	}
 	if nil != self.sleep {
 		select {
