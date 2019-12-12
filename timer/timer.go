@@ -29,9 +29,7 @@ var (
 func init() {
 	defaultTimers = timers{
 		queue: make([]timer, 64),
-		pooll: pooll.New(&pooll.Config{
-			Handler: runHandler,
-		}),
+		pooll: pooll.New(nil),
 	}
 }
 
@@ -80,7 +78,7 @@ func After(d time.Duration, f func()) {
 					realloc(c << 1)
 				} else {
 					// 右移
-					move((c - defaultTimers.right) >> 1)
+					move(defaultTimers.left + ((c - defaultTimers.right) >> 1))
 				}
 			}
 			defaultTimers.left--
@@ -167,10 +165,6 @@ __loop:
 		<-defaultTimers.wakeup
 	}
 	goto __loop
-}
-
-func runHandler(v interface{}) {
-	v.(func())()
 }
 
 func realloc(c int) {

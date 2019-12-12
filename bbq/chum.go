@@ -119,7 +119,7 @@ func (self *chum) close(locked bool) (err error) {
 		return Error_closed
 	}
 	if !locked {
-		self.party.chumsLk.Lock()
+		self.party.chumsLK.Lock()
 	}
 	if self.id != "" {
 		delete(self.party.chumsMap, self.id)
@@ -142,7 +142,7 @@ func (self *chum) close(locked bool) (err error) {
 	}
 	self.party.kpoller.Del(self.fd)
 	if !locked {
-		self.party.chumsLk.Unlock()
+		self.party.chumsLK.Unlock()
 	}
 	if nil != self.team {
 		self.team.remove(self)
@@ -181,24 +181,21 @@ func (self *chum) Closed() bool {
 func (self *chum) Register(id string) {
 	if self.id == "" {
 		self.id = id
-		self.party.chumsLk.Lock()
-		chum, ok := self.party.chumsMap[id]
-		if ok {
+		self.party.chumsLK.Lock()
+		chum := self.party.chumsMap[id]
+		if nil != chum {
 			chum.close(true)
 		}
 		self.party.chumsMap[id] = self
-		self.party.chumsLk.Unlock()
+		self.party.chumsLK.Unlock()
 	}
 }
 
 func (self *chum) GetChumById(id string) Chum {
-	self.party.chumsLk.RLock()
-	chum, ok := self.party.chumsMap[id]
-	self.party.chumsLk.RUnlock()
-	if ok {
-		return chum
-	}
-	return nil
+	self.party.chumsLK.RLock()
+	chum := self.party.chumsMap[id]
+	self.party.chumsLK.RUnlock()
+	return chum
 }
 
 func (self *chum) Join(id string) {
@@ -209,8 +206,8 @@ func (self *chum) Join(id string) {
 		self.team.remove(self)
 	}
 	self.party.teamsLK.Lock()
-	team, ok := self.party.teams[id]
-	if !ok {
+	team := self.party.teams[id]
+	if nil == team {
 		team = newTeam(self.party, id)
 		self.party.teams[id] = team
 	}
@@ -295,7 +292,6 @@ func (self *chum) Write(b []byte) (nn int, err error) {
 	var n int
 	nn = len(b)
 	self.writeLK.Lock()
-	defer self.writeLK.Unlock()
 	if nil == self.writeBuf {
 		// 尝试写一次
 		n, err = self.write(b)
@@ -303,6 +299,7 @@ func (self *chum) Write(b []byte) (nn int, err error) {
 			switch err {
 			case syscall.EAGAIN, syscall.EINTR:
 			default:
+				self.writeLK.Unlock()
 				return n, err
 			}
 		}
@@ -330,6 +327,7 @@ func (self *chum) Write(b []byte) (nn int, err error) {
 		copy(self.writeBuf[self.writeOffset:], b)
 		self.writeOffset += uint32(nn)
 	}
+	self.writeLK.Unlock()
 	return
 }
 
@@ -356,9 +354,9 @@ func (self *chum) WriteFrame(b []byte, text bool) (int, error) {
 
 func (self *chum) writeLoop() error {
 	self.writeLK.Lock()
-	defer self.writeLK.Unlock()
 	n, err := self.write(self.writeBuf[:self.writeOffset])
 	if nil != err {
+		self.writeLK.Unlock()
 		return err
 	}
 	if n != int(self.writeOffset) {
@@ -370,6 +368,7 @@ func (self *chum) writeLoop() error {
 		// #ctr 重新侦听 read
 		self.party.kpoller.Mod(self.fd, kpoll.KEV_READ|kpoll.KEF_ET)
 	}
+	self.writeLK.Unlock()
 	return err
 }
 
@@ -393,18 +392,18 @@ __retry:
 				self.Close()
 				return Error_notsupport_rsv
 			}
-			n = 2
 			self.header = bs[0] & header_fin
 			self.opCode = bs[0] & 0x0F
+			bs[0] = 2
 			if bs[1]&0x80 != 0 {
 				self.header |= header_mask
-				n += 4
+				bs[0] += 4
 			}
 			self.payloadLength = uint32(bs[1] & 0x7F)
 			switch {
 			case self.payloadLength < 126:
 			case self.payloadLength == 126:
-				n += 2
+				bs[0] += 2
 			default:
 				// 不支持长数据
 				self.Close()
@@ -419,20 +418,12 @@ __retry:
 				self.Close()
 				return Error_opcode
 			}
-			bs[0] = uint8(n)
 		} else {
 			return
 		}
-	} else {
-		if self.payloadOffset == 2 {
-			// 如果同时有多个线程在读的话，那么第二个线程将经过此处
-			// 事实上，此时该连接已经由第一个线程关闭了
-			return Error_closed
-		}
-		n = int(bs[0])
 	}
-	if self.payloadOffset < uint32(n) {
-		n, err = self.Read(bs[self.payloadOffset:n])
+	if self.payloadOffset < uint32(bs[0]) {
+		n, err = self.Read(bs[self.payloadOffset:bs[0]])
 		if nil != err {
 			return
 		}
@@ -520,6 +511,12 @@ __retry:
 				if self.length != 0 {
 					// 待读取的缓冲
 					self.readBuf = PBytes.Get(int(self.length), int(self.length))
+				} else {
+					self.flags |= flag_data | flag_discard
+
+					// 更新活跃时间（有效的通信才是活跃的）
+					self.active = timer.Now()
+					self.handler(self)
 				}
 			case ActionType_stream:
 				self.flags |= flag_length | flag_stream
@@ -644,9 +641,11 @@ func (self *chum) readLoop() {
 	if self.flags&flag_discard != 0 {
 		// 无效数据，需要丢弃
 		if self.payloadOffset < self.payloadLength {
-			n, _ := io.CopyN(ioutil.Discard, self, int64(self.payloadLength-self.payloadOffset))
+			n, err := io.CopyN(ioutil.Discard, self, int64(self.payloadLength-self.payloadOffset))
+			if nil != err {
+				goto __end
+			}
 			self.payloadOffset += uint32(n)
-			goto __end
 		}
 	}
 

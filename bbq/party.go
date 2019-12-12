@@ -10,14 +10,16 @@ import (
 	"time"
 )
 
+// TODO: 增加生命周期
 type party struct {
 	upgrader *ws.Upgrader
 
 	kpoller    kpoll.Kpoll
 	poollWrite pooll.Pooll
 	poollRead  pooll.Pooll
+	poollTeam  pooll.Pooll
 
-	chumsLk  sync.RWMutex
+	chumsLK  sync.RWMutex
 	chumsMap map[string]*chum
 	chums    map[int]*chum
 	head     *chum
@@ -112,7 +114,7 @@ func (self *party) Listen(network, address string) (err error) {
 				party:  self,
 				active: timer.Now(),
 			}
-			self.chumsLk.Lock()
+			self.chumsLK.Lock()
 			self.chums[chum.fd] = chum
 			if nil == self.head {
 				self.head = chum
@@ -121,7 +123,7 @@ func (self *party) Listen(network, address string) (err error) {
 				self.last.anext = chum
 			}
 			self.last = chum
-			self.chumsLk.Unlock()
+			self.chumsLK.Unlock()
 			self.kpoller.Add(chum.fd, kpoll.KEV_READ|kpoll.KEF_ET)
 		},
 	})
@@ -131,6 +133,9 @@ func (self *party) Listen(network, address string) (err error) {
 	self.teams = make(map[string]*team)
 	self.wakeup = make(chan struct{}, 1)
 
+	self.poollTeam = pooll.New(&pooll.Config{
+		Max: 1,
+	})
 	self.poollRead = pooll.New(&pooll.Config{
 		Handler: readHandler,
 	})
@@ -147,7 +152,7 @@ func (self *party) Listen(network, address string) (err error) {
 			} else {
 				if lk == 0 {
 					lk = 1
-					self.chumsLk.RLock()
+					self.chumsLK.RLock()
 				}
 				chum := self.chums[events[i].Fd]
 				if nil == chum {
@@ -157,7 +162,7 @@ func (self *party) Listen(network, address string) (err error) {
 				case events[i].Event&(kpoll.KEV_HUP|kpoll.KEV_RDHUP|kpoll.KEV_ERR) != 0:
 					if lk == 1 {
 						lk = 0
-						self.chumsLk.RUnlock()
+						self.chumsLK.RUnlock()
 					}
 					chum.Close()
 				case events[i].Event&kpoll.KEV_READ != 0:
@@ -168,7 +173,7 @@ func (self *party) Listen(network, address string) (err error) {
 			}
 		}
 		if lk == 1 {
-			self.chumsLk.RUnlock()
+			self.chumsLK.RUnlock()
 		}
 	})
 	if nil != err {
@@ -192,7 +197,7 @@ func (self *party) AddRouters(routers ...Router) {
 func (self *party) timeoutLoop() {
 __loop:
 	closed, count := 0, 0
-	self.chumsLk.Lock()
+	self.chumsLK.Lock()
 	if nil == self.cursor {
 		self.cursor = self.head
 	}
@@ -219,7 +224,7 @@ __loop:
 			}
 		}
 	}
-	self.chumsLk.Unlock()
+	self.chumsLK.Unlock()
 	now = timer.Now()
 	if now < self.clock+int64(time.Second) {
 		self.frequently++
@@ -235,19 +240,15 @@ __loop:
 	} else {
 		self.sleep.Reset(time.Duration(self.timeoutInterval))
 	}
-	if nil != self.sleep {
-		select {
-		case <-self.sleep.C:
-			self.sleep = nil
-		case <-self.wakeup:
-			if nil != self.sleep {
-				if !self.sleep.Stop() {
-					self.sleep = nil
-				}
+	select {
+	case <-self.sleep.C:
+		self.sleep = nil
+	case <-self.wakeup:
+		if nil != self.sleep {
+			if !self.sleep.Stop() {
+				self.sleep = nil
 			}
 		}
-	} else {
-		<-self.wakeup
 	}
 	goto __loop
 }

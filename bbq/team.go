@@ -30,41 +30,47 @@ func newTeam(party *party, id string) *team {
 }
 
 func (self *team) add(chum *chum) {
-	self.rwLK.Lock()
-	chum.team = self
-	if nil == self.head {
-		self.head = chum
-	} else {
-		chum.prev = self.last
-		self.last.next = chum
-	}
-	self.last = chum
-	self.length++
-	self.rwLK.Unlock()
+	self.party.poollTeam.Put(func() {
+		self.rwLK.Lock()
+		if nil == self.head {
+			self.head = chum
+		} else {
+			chum.prev = self.last
+			self.last.next = chum
+		}
+		chum.team = self
+		self.last = chum
+		self.length++
+		self.rwLK.Unlock()
+	})
 }
 
 func (self *team) remove(chum *chum) {
-	self.rwLK.Lock()
-	chum.team = nil
-	if nil != chum.next {
-		chum.next.prev = chum.prev
-	}
-	if nil != chum.prev {
-		chum.prev.next = chum.next
-	} else {
-		self.head = chum.next
-	}
-	if chum == self.last {
-		self.last = chum.prev
-	}
-	if self.length == 1 {
-		self.party.teamsLK.Lock()
-		delete(self.party.teams, self.id)
-		self.party.teamsLK.Unlock()
-	} else {
-		self.length--
-	}
-	self.rwLK.Unlock()
+	self.party.poollTeam.Put(func() {
+		self.rwLK.Lock()
+		if nil != chum.next {
+			chum.next.prev = chum.prev
+		}
+		if nil != chum.prev {
+			chum.prev.next = chum.next
+		} else {
+			self.head = chum.next
+		}
+		if chum == self.last {
+			self.last = chum.prev
+		}
+		chum.prev = nil
+		chum.next = nil
+		chum.team = nil
+		if self.length == 1 {
+			self.party.teamsLK.Lock()
+			delete(self.party.teams, self.id)
+			self.party.teamsLK.Unlock()
+		} else {
+			self.length--
+		}
+		self.rwLK.Unlock()
+	})
 }
 
 func (self *team) broadcast(chum *chum, b []byte, text bool, delay time.Duration) error {

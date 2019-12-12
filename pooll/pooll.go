@@ -30,6 +30,7 @@ type Pooll interface {
 }
 
 type Config struct {
+	Max     uint32
 	Handler func(v interface{})
 }
 
@@ -41,8 +42,12 @@ func New(config *Config) Pooll {
 	if nil == config {
 		config = defaultConfig
 	}
+	max := config.Max
+	if max == 0 {
+		max = uint32(runtime.GOMAXPROCS(0))
+	}
 	self := &poollTask{
-		max:     uint32(runtime.GOMAXPROCS(0)),
+		max:     max,
 		handler: config.Handler,
 	}
 	self.cond = sync.NewCond(&self.lk)
@@ -107,6 +112,7 @@ __retry:
 		self.cond.Wait()
 		goto __retry
 	}
+	self.length--
 	if task == self.last {
 		self.last = nil
 	}
