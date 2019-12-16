@@ -182,8 +182,8 @@ func (self *chum) Register(id string) {
 	if self.id == "" {
 		self.id = id
 		self.party.chumsLK.Lock()
-		chum := self.party.chumsMap[id]
-		if nil != chum {
+		chum, ok := self.party.chumsMap[id]
+		if ok {
 			chum.close(true)
 		}
 		self.party.chumsMap[id] = self
@@ -193,9 +193,12 @@ func (self *chum) Register(id string) {
 
 func (self *chum) GetChumById(id string) Chum {
 	self.party.chumsLK.RLock()
-	chum := self.party.chumsMap[id]
+	chum, ok := self.party.chumsMap[id]
 	self.party.chumsLK.RUnlock()
-	return chum
+	if ok {
+		return chum
+	}
+	return nil
 }
 
 func (self *chum) Join(id string) {
@@ -206,8 +209,8 @@ func (self *chum) Join(id string) {
 		self.team.remove(self)
 	}
 	self.party.teamsLK.Lock()
-	team := self.party.teams[id]
-	if nil == team {
+	team, ok := self.party.teams[id]
+	if !ok {
 		team = newTeam(self.party, id)
 		self.party.teams[id] = team
 	}
