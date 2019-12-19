@@ -48,26 +48,28 @@ func (self *team) add(chum *chum) {
 func (self *team) remove(chum *chum) {
 	self.party.poollTeam.Put(func() {
 		self.rwLK.Lock()
-		if nil != chum.next {
-			chum.next.prev = chum.prev
-		}
-		if nil != chum.prev {
-			chum.prev.next = chum.next
-		} else {
-			self.head = chum.next
-		}
-		if chum == self.last {
-			self.last = chum.prev
-		}
-		chum.prev = nil
-		chum.next = nil
-		chum.team = nil
-		if self.length == 1 {
-			self.party.teamsLK.Lock()
-			delete(self.party.teams, self.id)
-			self.party.teamsLK.Unlock()
-		} else {
+		if self.length != 0 {
+			if nil != chum.next {
+				chum.next.prev = chum.prev
+			}
+			if nil != chum.prev {
+				chum.prev.next = chum.next
+			} else {
+				self.head = chum.next
+			}
+			if chum == self.last {
+				self.last = chum.prev
+			}
+			chum.prev = nil
+			chum.next = nil
+			chum.team = nil
 			self.length--
+			if self.length == 0 {
+				self.party.teamsLK.Lock()
+				delete(self.party.teams, self.id)
+				self.party.teamsLK.Unlock()
+				self.id = ""
+			}
 		}
 		self.rwLK.Unlock()
 	})
