@@ -144,9 +144,8 @@ func (self *chum) close(locked bool) (err error) {
 	if !locked {
 		self.party.chumsLK.Unlock()
 	}
-	if nil != self.team {
-		self.team.remove(self)
-		self.team = nil
+	if team := self.team; nil != team {
+		team.remove(self)
 	}
 	if nil != self.readBuf {
 		PBytes.Put(self.readBuf)
@@ -157,8 +156,6 @@ func (self *chum) close(locked bool) (err error) {
 		self.writeBuf = nil
 	}
 	err = self.Conn.Close()
-	self.prev = nil
-	self.next = nil
 	self.aprev = nil
 	self.anext = nil
 	self.party = nil
@@ -202,11 +199,11 @@ func (self *chum) GetChumById(id string) Chum {
 }
 
 func (self *chum) Join(id string) {
-	if nil != self.team {
-		if id == self.team.id {
+	if team := self.team; nil != team {
+		if id == team.id {
 			return
 		}
-		self.team.remove(self)
+		team.remove(self)
 	}
 	self.party.teamsLK.Lock()
 	team, ok := self.party.teams[id]
@@ -219,14 +216,14 @@ func (self *chum) Join(id string) {
 }
 
 func (self *chum) Leave() {
-	if nil != self.team {
-		self.team.remove(self)
+	if team := self.team; nil != team {
+		team.remove(self)
 	}
 }
 
 func (self *chum) Broadcast(b []byte, text bool, delay time.Duration) error {
-	if nil != self.team {
-		return self.team.broadcast(self, b, text, delay)
+	if team := self.team; nil != team {
+		return team.broadcast(self, b, text, delay)
 	}
 	return nil
 }

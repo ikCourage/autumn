@@ -16,10 +16,10 @@ type poollTask struct {
 	cond    *sync.Cond
 	head    *task
 	last    *task
-	length  uint32
-	worker  uint32
-	max     uint32
-	working uint32
+	length  int
+	max     int
+	worker  int
+	working int
 	release bool
 	handler func(v interface{})
 }
@@ -30,7 +30,8 @@ type Pooll interface {
 }
 
 type Config struct {
-	Max     uint32
+	Max     int
+	Lazy    bool
 	Handler func(v interface{})
 }
 
@@ -43,22 +44,26 @@ func New(config *Config) Pooll {
 		config = defaultConfig
 	}
 	max := config.Max
-	if max == 0 {
-		max = uint32(runtime.GOMAXPROCS(0))
+	if max <= 0 {
+		max = runtime.GOMAXPROCS(0) << 1
 	}
 	self := &poollTask{
 		max:     max,
 		handler: config.Handler,
 	}
 	self.cond = sync.NewCond(&self.lk)
+	if !config.Lazy {
+		self.worker = max
+		for max > 0 {
+			max--
+			go self.loop(max)
+		}
+	}
 	return self
 }
 
 func (self *poollTask) Rel() {
 	self.lk.Lock()
-	self.head = nil
-	self.last = nil
-	self.handler = nil
 	self.release = true
 	self.lk.Unlock()
 	self.cond.Broadcast()
@@ -67,7 +72,7 @@ func (self *poollTask) Rel() {
 func (self *poollTask) Put(v interface{}) error {
 	if nil == self.handler {
 		if _, ok := v.(func()); ok == false {
-			return fmt.Errorf("not func")
+			return fmt.Errorf("expect a function")
 		}
 	}
 	self.lk.Lock()
@@ -81,7 +86,7 @@ func (self *poollTask) Put(v interface{}) error {
 	}
 	self.last = task
 	self.length++
-	if self.worker > self.working {
+	if self.length < self.worker-self.working {
 		self.lk.Unlock()
 		self.cond.Signal()
 	} else {
@@ -94,7 +99,7 @@ func (self *poollTask) Put(v interface{}) error {
 	return nil
 }
 
-func (self *poollTask) loop(worker uint32) {
+func (self *poollTask) loop(worker int) {
 	b := true
 __loop:
 	self.cond.L.Lock()
@@ -105,24 +110,25 @@ __retry:
 	task := self.head
 	if nil == task {
 		if self.release {
+			self.cond.L.Unlock()
 			return
 		}
-		b = true
 		self.working--
 		self.cond.Wait()
+		b = true
 		goto __retry
 	}
-	self.length--
 	if task == self.last {
 		self.last = nil
 	}
 	self.head = task.next
+	self.length--
 	self.cond.L.Unlock()
-	b = false
 	if nil != self.handler {
 		self.handler(task.args)
 	} else {
 		task.args.(func())()
 	}
+	b = false
 	goto __loop
 }
