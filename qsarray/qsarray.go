@@ -106,8 +106,8 @@ func (self *QSArray) Shift() Value {
 func (self *QSArray) Pop() Value {
 	var v Value
 	if self.left < self.right {
-		v = self.arr[self.right]
 		self.right--
+		v = self.arr[self.right]
 		self.trim()
 	}
 	return v
